@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="UTF-8">
+		<title>RTCVE</title>
+		<style>
+			body {
+				background-color: gray;
+			}
+			iframe {
+				display: block;
+			}
+		</style>
+	</head>
+	<body>
+		<iframe></iframe>
+		<!-- optional output to video -->
+		<!-- <video controls></video> -->
+		<script type="module">
+
+			// Real Time Canvas Video Exporter
+			// ----------------------------------------------------------------
+			// This page loads a collection info through OpenSea’s API,
+			// displays it trough an iframe and records a video stream
+			// of the canvas.
+			// It’s meant to be used locally.
+			//
+			// NOTE: this works only if same-origin policy is disabled in browser
+			// * Safari
+			//   Settings > Developer > Disable cross-origin restrictions
+			// * Chrome
+			//   close all sessions and them run from maxOS terminal:
+			//   open -na "Google Chrome" --args --user-data-dir=/tmp/temporary-chrome-profile-dir --disable-web-security --disable-site-isolation-trials
+			// * FireFox
+			//   TODO
+
+			// ---- step 1 ----------------------------------------------------
+			// Fetch the metadata for each token of the collection trough OpenSea’s API
+
+			// OpenSea auth key, refer to:
+			// https://docs.opensea.io/reference/api-overview
+			// Create an 'auth.txt' file and put it next to this file
+			const AUTH = await fetch('./auth.txt').then( e => e.text())
+			console.log("Using OS auth key: " + AUTH)
+
+			// Collection name (last part of the OpensSea URL)
+			const COLLECTION = 'crush-5'
+
+			// EndPoint
+			const API = 'https://api.opensea.io/api/v2/collection/' + COLLECTION + '/nfts?limit=128'
+
+			// Fetch options
+			const OPTS = {
+				method: 'GET',
+				headers: {
+					'accept': 'application/json',
+					'x-api-key': AUTH
+				}
+			}
+
+			// Cumbersome while loop to deal with OS “next” pagination method
+			const MERGED_OS_METADATA = []
+			{
+				let next = -1
+				while(next !== undefined) {
+					console.log("Page: " + next)
+					const URL = next == -1 ? API : API + '&next=' + encodeURIComponent(next)
+					await fetch(URL, OPTS)
+					.then(r => r.json())
+					.then(r => {
+						MERGED_OS_METADATA.push(...r.nfts)
+						next = r.next
+					})
+				}
+			}
+
+			console.log("OpenSea metadata loaded...")
+
+			// Slow assembly of the original token metadata as each json is retrieved individually, unfortunately.
+			// NOTE: Could be faster (single call) through Highlight’s API [not public as of 19.12.2023]
+			const TOKEN_METADATA = await Promise.all(
+				MERGED_OS_METADATA
+				.sort((a, b) => parseInt(a.identifier) - parseInt(b.identifier))
+				.map( e => e.metadata_url)
+				.map(e => {
+					return fetch(e).then(e => e.json())
+				})
+			)
+
+			console.log("Metadata for " + TOKEN_METADATA.length + " nfts loaded...")
+
+			// ---- step 2 ----------------------------------------------------
+			// Retrieve the canvas from each project and record it to a WEBM file
+
+			const RECORD_DURATION = 10_000     // 10 sec
+			const BIT_RATE        = 15_000_000 // 15 MBps
+			const MIME_TYPE       = 'video/webm'
+			//const MIME_TYPE     = 'video/mp4; codecs="avc1.4D4028, mp4a.40.2"', // works in Safari
+
+			// Desired output size
+			// NOTE: Output size may change if canvas is sized using CSS pixel or 1:1 display native pixel
+			const frame = document.querySelector('iframe')
+			frame.width = 1280
+			frame.height = 720
+
+			// Loop to easily resume broken queues and/or select slices
+			for (let i=5; i<10; i++) {
+				await new Promise((resolve, reject) => {
+
+					frame.src = TOKEN_METADATA[i].animation_url // <- pass custom URL params here, in case
+					frame.onload = e => {
+
+						// This works only if same-origin policy is disabled (see above)
+						const canvas = frame.contentWindow.document.querySelector('canvas')
+
+						// Build output filename from metadata "name" field
+						let file_name = TOKEN_METADATA[i].name.replace('#', '').replace(' ', '_')
+						file_name += "_" + frame.width + "×" + frame.height
+
+						console.log("Recording " + file_name)
+						const stream = canvas.captureStream()
+						// https://developer.mozilla.org/en-US/docs/Web/API/HTMLCanvasElement/captureStream
+						const recorder = new MediaRecorder(stream, {
+							mimeType: MIME_TYPE,
+							videoBitsPerSecond: BIT_RATE,
+						})
+
+						recorder.addEventListener('dataAvailable', e => {
+							const blob = new Blob([ e.data ], { type : MIME_TYPE })
+							const video_URL = URL.createObjectURL(blob)
+
+							// -- enbale in browser video preview --
+							// const video = document.querySelector('video')
+							// video.width = canvas.width
+							// video.height = canvas.height
+							// video.src = video_URL
+
+							const a = document.createElement('a')
+							a.setAttribute('download', file_name)
+							a.setAttribute('href', video_URL)
+							a.click()
+
+							resolve()
+						})
+						recorder.start()
+						setTimeout( () => recorder.stop(), RECORD_DURATION)
+					}
+				})
+			}
+		</script>
+	</body>
+</html>
