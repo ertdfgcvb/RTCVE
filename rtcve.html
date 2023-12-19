@@ -125,7 +125,7 @@
 							videoBitsPerSecond: BIT_RATE,
 						})
 
-						recorder.addEventListener('dataAvailable', e => {
+						recorder.addEventListener('dataavailable', e => {
 							const blob = new Blob([ e.data ], { type : MIME_TYPE })
 							const video_URL = URL.createObjectURL(blob)
 
